@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Teach Me</title>
+<style>
+:root { --bg:#0f1115; --panel:#171a21; --text:#e6e8ee; --muted:#8b93a3; --accent:#4f8cff; --ok:#3fb950; --warn:#d29922; --err:#f85149; }
+* { box-sizing:border-box; }
+body { margin:0; font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif; background:var(--bg); color:var(--text); }
+#app { display:grid; grid-template-columns:300px 1fr; height:100vh; }
+.sidebar { background:var(--panel); border-right:1px solid #232733; padding:1.25rem; overflow-y:auto; }
+.sidebar h1 { font-size:1.1rem; margin:0 0 .5rem; }
+.pill { display:inline-block; background:#1c2230; border:1px solid #2a3142; color:var(--text); border-radius:999px; padding:.25rem .75rem; margin:.25rem .25rem 0 0; font-size:.85rem; }
+.pill .n { color:var(--accent); font-weight:700; }
+.concept { padding:.5rem .6rem; border-radius:8px; margin-top:.35rem; cursor:pointer; }
+.concept:hover { background:#1e2433; }
+.concept .meta { font-size:.78rem; color:var(--muted); }
+.concept .stage { float:right; font-size:.7rem; text-transform:uppercase; letter-spacing:.04em; }
+.stage-docket{ color:var(--warn); } .stage-off_docket{ color:var(--ok); } .stage-eventually{ color:var(--muted); }
+.main { padding:2rem; overflow-y:auto; }
+h2 { margin-top:0; }
+.card { background:var(--panel); border:1px solid #232733; border-radius:12px; padding:1.25rem; max-width:720px; }
+.card .objective { color:var(--muted); font-size:.9rem; }
+button { background:var(--accent); color:#0b0e13; border:0; border-radius:8px; padding:.5rem 1rem; font-weight:600; cursor:pointer; }
+button:disabled { opacity:.5; cursor:default; }
+.row { display:flex; gap:.5rem; margin-top:1rem; align-items:center; }
+select, input, textarea { background:#0d1017; color:var(--text); border:1px solid #2a3142; border-radius:8px; padding:.5rem; }
+textarea { width:100%; min-height:80px; }
+.log { margin-top:1rem; font-size:.85rem; color:var(--muted); white-space:pre-wrap; }
+</style>
+</head>
+<body>
+<div id="app">
+  <aside class="sidebar">
+    <h1>Teach Me</h1>
+    <div id="pills"></div>
+    <div id="concepts"></div>
+  </aside>
+  <main class="main">
+    <div id="view"></div>
+  </main>
+</div>
+<script src="app.js"></script>
+</body>
+</html>

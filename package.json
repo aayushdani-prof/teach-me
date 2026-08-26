@@ -1,0 +1,11 @@
+{
+  "name": "teachme-runtime",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Teach Me runtime — local web app (Node + node:sqlite)",
+  "scripts": {
+    "start": "node server/index.js"
+  },
+  "engines": { "node": ">=22.5.0" }
+}

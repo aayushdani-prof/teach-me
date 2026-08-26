@@ -1,0 +1,8 @@
+state/
+artifacts/
+node_modules/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+.DS_Store

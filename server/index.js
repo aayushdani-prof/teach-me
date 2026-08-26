@@ -3,7 +3,7 @@ import { readFileSync, statSync } from "node:fs";
 import { join, extname } from "node:path";
 import { openDb } from "./db.js";
 import { computeDue, applyOutcome, nowIso } from "./scheduler.js";
-import { chat } from "./agent.js";
+import { chat, extractGaps } from "./agent.js";
 import { getThread, appendThread } from "./threads.js";
 
 const db = openDb();
@@ -79,20 +79,19 @@ const server = createServer((req, res) => {
           { system: "drilldown_system" }
         );
         appendThread(conceptId, "assistant", reply);
-        // Log gaps (if the agent reported them) into a gap table for the review queue
-        const gapMatch = reply.match(/\{"gaps": \[.*\]\}/s);
-        if (gapMatch) {
-          try {
-            const { gaps } = JSON.parse(gapMatch[0]);
-            for (const g of gaps) {
-              db.prepare(
-                `INSERT INTO reviews (concept_id, ts, kind, outcome, confidence, interval, due_at, notes)
-                 VALUES (?,?,?,?,?,?,?,?)`
-              ).run(conceptId, nowIso(), "calibration", "fail", null, 1.0, nowIso(), `gap: ${g.missing}`);
-            }
-          } catch {}
+        // Reliable gap detection: dedicated extractor call, then persist
+        const gaps = await extractGaps(concept.title, getThread(conceptId));
+        for (const g of gaps) {
+          db.prepare(
+            `INSERT INTO gaps (concept_id, missing, depth, ts, status, source_thread)
+             VALUES (?,?,?,?,?,?)`
+          ).run(conceptId, g.missing, g.depth ?? 1, nowIso(), "open", conceptId);
+          db.prepare(
+            `INSERT INTO reviews (concept_id, ts, kind, outcome, confidence, interval, due_at, notes)
+             VALUES (?,?,?,?,?,?,?,?)`
+          ).run(conceptId, nowIso(), "calibration", "fail", null, 1.0, nowIso(), `gap: ${g.missing}`);
         }
-        send(res, 200, JSON.stringify({ reply, thread: getThread(conceptId) }));
+        send(res, 200, JSON.stringify({ reply, thread: getThread(conceptId), gaps }));
       } catch (e) { send(res, 500, JSON.stringify({ error: e.message })); }
     });
     return;

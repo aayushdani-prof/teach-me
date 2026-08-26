@@ -86,6 +86,17 @@ CREATE TABLE calibration (
     delta REAL NOT NULL
 );
 
+CREATE TABLE gaps (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    concept_id TEXT NOT NULL,
+    missing TEXT NOT NULL,
+    depth INTEGER NOT NULL DEFAULT 1,
+    ts TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'open'
+        CHECK (status IN ('open','scheduled','resolved')),
+    source_thread TEXT
+);
+
 CREATE TABLE settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL

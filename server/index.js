@@ -3,6 +3,8 @@ import { readFileSync, statSync } from "node:fs";
 import { join, extname } from "node:path";
 import { openDb } from "./db.js";
 import { computeDue, applyOutcome, nowIso } from "./scheduler.js";
+import { chat } from "./agent.js";
+import { getThread, appendThread } from "./threads.js";
 
 const db = openDb();
 const PORT = process.env.PORT || 4173;
@@ -54,6 +56,46 @@ const server = createServer((req, res) => {
     const total = db.prepare("SELECT COUNT(*) n FROM concepts").get().n;
     const mastered = db.prepare("SELECT COUNT(*) n FROM concepts WHERE stage='off_docket'").get().n;
     return send(res, 200, JSON.stringify({ total, mastered }));
+  }
+  if (url.pathname === "/api/thread" && req.method === "GET") {
+    const conceptId = url.searchParams.get("conceptId");
+    return send(res, 200, JSON.stringify({ thread: getThread(conceptId) }));
+  }
+  if (url.pathname === "/api/chat" && req.method === "POST") {
+    let body = "";
+    req.on("data", (c) => (body += c));
+    req.on("end", async () => {
+      try {
+        const { conceptId, message } = JSON.parse(body || "{}");
+        const concept = db.prepare("SELECT * FROM concepts WHERE id = ?").get(conceptId);
+        if (!concept) return send(res, 404, JSON.stringify({ error: "unknown concept" }));
+        appendThread(conceptId, "user", message);
+        const thread = getThread(conceptId);
+        const reply = await chat(
+          [
+            { role: "system", content: `Concept: ${concept.title}\nObjective: ${concept.objective}\nModule: ${concept.module_id}` },
+            ...thread.map((m) => ({ role: m.role, content: m.content })),
+          ],
+          { system: "drilldown_system" }
+        );
+        appendThread(conceptId, "assistant", reply);
+        // Log gaps (if the agent reported them) into a gap table for the review queue
+        const gapMatch = reply.match(/\{"gaps": \[.*\]\}/s);
+        if (gapMatch) {
+          try {
+            const { gaps } = JSON.parse(gapMatch[0]);
+            for (const g of gaps) {
+              db.prepare(
+                `INSERT INTO reviews (concept_id, ts, kind, outcome, confidence, interval, due_at, notes)
+                 VALUES (?,?,?,?,?,?,?,?)`
+              ).run(conceptId, nowIso(), "calibration", "fail", null, 1.0, nowIso(), `gap: ${g.missing}`);
+            }
+          } catch {}
+        }
+        send(res, 200, JSON.stringify({ reply, thread: getThread(conceptId) }));
+      } catch (e) { send(res, 500, JSON.stringify({ error: e.message })); }
+    });
+    return;
   }
   if (url.pathname.startsWith("/api/")) {
     return send(res, 404, JSON.stringify({ error: "unknown api" }));

@@ -4,8 +4,8 @@ import os
 import sqlite3
 from datetime import datetime, timezone
 
-DB_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "state", "teachme.db")
 SCHEMA_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "db", "schema.sql")
+DB_PATH = os.path.join(os.path.expanduser("~"), ".teachme", "teachme.db")
 
 
 def now_iso() -> str:

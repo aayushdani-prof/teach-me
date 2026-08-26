@@ -7,3 +7,7 @@ Infrastructure around the skill engine: local SQLite, scheduler, terminal-first 
 - Terminal-first v1; desktop app once the loop survives a full module.
 
 Layout: `db/` schema, `src/` future, `state/` runtime, `artifacts/` learner work, `docs/`
+
+## Privacy
+All learning state (SQLite DB, session logs, artifacts) stays local and is
+gitignored. Nothing personal is published with this codebase.

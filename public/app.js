@@ -295,19 +295,57 @@ async function submitAdd() {
 }
 
 
-/* ---------- Graph ---------- */
+/* ---------- Graph (stable diagram) ---------- */
 let graphState = null;
+
+function layoutGraph(nodes, edges) {
+  // 1. level each node: max(level of prereqs/ghost-sources) + 1
+  const level = {};
+  for (const n of nodes) level[n.id] = 0;
+  // propagate levels: prereq edges push dependents one level deeper (repeat for chains)
+  for (let it = 0; it < nodes.length + 1; it++) {
+    for (const e of edges) {
+      if (e.kind !== "prereq") continue;
+      const a = e.from, b = e.to;
+      const need = (level[a] || 0) + 1;
+      if ((level[b] || 0) < need) level[b] = need;
+    }
+  }
+  // group by level
+  const byLevel = {};
+  for (const n of nodes) {
+    const l = level[n.id] || 0;
+    (byLevel[l] = byLevel[l] || []).push(n);
+  }
+  const levels = Object.keys(byLevel).map(Number).sort((a, b) => a - b);
+  const NODE_W = 170, NODE_H = 54, GX = 36, GY = 46;
+  for (const l of levels) {
+    const row = byLevel[l].sort((a, b) => (a.label || "").localeCompare(b.label || ""));
+    const rowH = (row.length - 1) * 26;
+    row.forEach((n, i) => {
+      n.x = 90 + l * (NODE_W + GX);
+      n.y = 60 + i * (NODE_H + GY) - rowH / 2;
+      n.w = NODE_W; n.h = NODE_H;
+    });
+  }
+  return { byLevel, levels };
+}
+
 async function renderGraph() {
   $("#view").innerHTML = `
     <div class="graph-wrap" id="graphWrap">
       <canvas id="graphCanvas"></canvas>
+      <div class="graph-top">
+        <button class="btn-ghost" onclick="graphFit()">Fit</button>
+        <button class="btn-ghost" onclick="graphReset()">Reset</button>
+      </div>
       <div class="graph-legend">
         <div class="lg"><span class="dot" style="background:#d29922"></span> learning</div>
         <div class="lg"><span class="dot" style="background:#3fb950"></span> mastered</div>
         <div class="lg"><span class="dot" style="background:#5a6577"></span> eventually</div>
         <div class="lg"><span class="dot" style="background:#d8519d"></span> gap needed</div>
       </div>
-      <div class="graph-hint">drag to move · scroll to zoom · click a node to open</div>
+      <div class="graph-hint">drag canvas to pan · scroll to zoom · drag a node to move · double-click to open</div>
     </div>`;
   const data = await api("/api/graph");
   const wrap = $("#graphWrap");
@@ -317,106 +355,167 @@ async function renderGraph() {
   canvas.width = W * devicePixelRatio; canvas.height = H * devicePixelRatio;
   ctx.scale(devicePixelRatio, devicePixelRatio);
 
-  const nodes = data.nodes.map((n, i) => {
-    const a = (i / Math.max(1, data.nodes.length)) * Math.PI * 2;
-    const r = Math.min(W, H) * 0.32;
-    return { ...n, x: W / 2 + Math.cos(a) * r * (0.6 + ((i % 3) * 0.2)), y: H / 2 + Math.sin(a) * r, vx: 0, vy: 0, r: 16 };
-  });
-  const edges = data.edges || [];
-  const nodeMap = new Map(nodes.map((n) => [n.id, n]));
-  graphState = { nodes, edges, canvas, ctx, W, H, zoom: 1, panX: 0, panY: 0, _alive: false, _raf: 0 };
+  // separate concept nodes from ghost nodes; ghost nodes sit right of their concept
+  const ghosts = (data.nodes || []).filter((n) => n.id.startsWith("ghost:"));
+  const concepts = (data.nodes || []).filter((n) => !n.id.startsWith("ghost:"));
+  const edges = (data.edges || []);
+  const nodeMap = new Map(concepts.map((n) => [n.id, n]));
 
-  const step = () => {
-    for (const n of nodes) {
-      for (const o of nodes) {
-        if (n === o) continue;
-        let dx = n.x - o.x, dy = n.y - o.y;
-        let d2 = dx * dx + dy * dy;
-        if (d2 < 1) d2 = 1;
-        const f = 3000 / d2;
-        n.vx += (dx / Math.sqrt(d2)) * f;
-        n.vy += (dy / Math.sqrt(d2)) * f;
-      }
-      for (const e of edges) {
-        const a = nodeMap.get(e.from), b = nodeMap.get(e.to);
-        if (!a || !b) continue;
-        const dx = b.x - a.x, dy = b.y - a.y;
-        const d = Math.sqrt(dx * dx + dy * dy) || 1;
-        const f = (d - 110) * 0.008;
-        a.vx += (dx / d) * f; a.vy += (dy / d) * f;
-        b.vx -= (dx / d) * f; b.vy -= (dy / d) * f;
-      }
-      n.vx += (W / 2 - n.x) * 0.0015;
-      n.vy += (H / 2 - n.y) * 0.0015;
-      n.vx *= 0.86; n.vy *= 0.86;
-      n.x += n.vx; n.y += n.vy;
-      n.x = Math.max(25, Math.min(W - 25, n.x));
-      n.y = Math.max(25, Math.min(H - 25, n.y));
-    }
-    draw();
-    if (graphState._alive) requestAnimationFrame(step);
-  };
+  // anchor each ghost next to its concept (fixed offset, not in layout)
+  for (const g of ghosts) {
+    const host = nodeMap.get(g.gapFor);
+    if (host) { g.x = host.x + host.w + 26; g.y = host.y; g.w = 150; g.h = 40; g.ghostOf = host.id; }
+  }
+
+  const laid = layoutGraph(concepts, edges);
+  // place ghosts on their host row (row index from host)
+  for (const g of ghosts) {
+    const host = nodeMap.get(g.gapFor);
+    if (host) { g.x = host.x + host.w + 26; g.y = host.y; }
+  }
+
+  // node lookup includes ghosts so gap edges resolve
+  const allMap = new Map([...nodeMap.entries(), ...ghosts.map((g) => [g.id, g])]);
+  graphState = { nodes: concepts, ghosts, edges, canvas, ctx, W, H, zoom: 1, panX: 0, panY: 0,
+                 nodeMap: allMap, dragNode: null, dragOffX: 0, dragOffY: 0, hover: null };
 
   const draw = () => {
-    const { ctx, W, H, zoom, panX, panY, nodes, edges } = graphState;
+    const { ctx, W, H, zoom, panX, panY } = graphState;
     ctx.clearRect(0, 0, W, H);
     ctx.save();
     ctx.translate(panX, panY);
     ctx.scale(zoom, zoom);
+
+    // edges (draw under)
     for (const e of edges) {
-      const a = nodeMap.get(e.from), b = nodeMap.get(e.to);
+      const a = allMap.get(e.from), b = allMap.get(e.to);
       if (!a || !b) continue;
       const isGap = e.kind === "gap";
-      ctx.beginPath();
-      ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y);
-      ctx.strokeStyle = isGap ? "rgba(216,157,255,.4)" : "rgba(141,157,196,.35)";
+      const x1 = a.x + a.w, y1 = a.y + a.h / 2;
+      const x2 = b.x, y2 = b.y + b.h / 2;
+      ctx.beginPath(); ctx.moveTo(x1, y1);
+      // orthogonal S-curve
+      const mx = (x1 + x2) / 2;
+      ctx.bezierCurveTo(mx, y1, mx, y2, x2, y2);
+      ctx.strokeStyle = isGap ? "rgba(216,157,255,.45)" : "rgba(141,157,196,.4)";
       ctx.lineWidth = isGap ? 1.5 : 2;
       ctx.setLineDash(isGap ? [5, 4] : []);
       ctx.stroke();
       ctx.setLineDash([]);
+      // arrowhead
+      const ang = Math.atan2(y2 - y1, x2 - x1);
+      ctx.beginPath();
+      ctx.moveTo(x2, y2);
+      ctx.lineTo(x2 - 8 * Math.cos(ang - 0.4), y2 - 8 * Math.sin(ang - 0.4));
+      ctx.lineTo(x2 - 8 * Math.cos(ang + 0.4), y2 - 8 * Math.sin(ang + 0.4));
+      ctx.closePath();
+      ctx.fillStyle = isGap ? "rgba(216,157,255,.45)" : "rgba(141,157,196,.4)";
+      ctx.fill();
     }
-    for (const n of nodes) {
+
+    // nodes: cards
+    const all = [...concepts, ...ghosts];
+    for (const n of all) {
+      const isGhost = !!n.ghost;
       const color = n.stage === "off_docket" ? "#3fb950" : n.stage === "gap" ? "#d8519d" : n.stage === "eventually" ? "#5a6577" : "#d29922";
-      const r = n.stage === "gap" ? 24 : (14 + n.mastery * 10);
-      const grad = ctx.createRadialGradient(n.x, n.y, 0, n.x, n.y, r * 2.2);
-      grad.addColorStop(0, color + "66"); grad.addColorStop(1, "transparent");
-      ctx.fillStyle = grad;
-      ctx.beginPath(); ctx.arc(n.x, n.y, r * 2.2, 0, Math.PI * 2); ctx.fill();
+      const hovered = graphState.hover === n.id;
+      const drag = graphState.dragNode === n;
+      ctx.fillStyle = hovered ? "rgba(255,255,255,.03)" : "rgba(18,22,31,0.6)";
+      ctx.strokeStyle = drag ? "#fff" : (hovered ? "#fff" : color);
+      ctx.lineWidth = hovered || drag ? 2 : 1.2;
+      ctx.beginPath();
+      const r = 8;
+      ctx.roundRect(n.x, n.y, n.w, n.h, r);
+      ctx.fill(); ctx.stroke();
+
+      // left status stripe
       ctx.fillStyle = color;
-      ctx.beginPath(); ctx.arc(n.x, n.y, r, 0, Math.PI * 2); ctx.fill();
-      ctx.fillStyle = "#e8ecf4";
-      ctx.font = "11px system-ui";
-      ctx.textAlign = "center";
-      ctx.fillText(n.label, n.x, n.y - r - 6);
+      ctx.beginPath(); ctx.roundRect(n.x, n.y, 5, n.h, [r, 0, 0, r]); ctx.fill();
+
+      // label
+      ctx.fillStyle = hovered || drag || n.stage === "gap" ? "#fff" : "#cbd2e0";
+      ctx.font = n.stage === "gap" ? "italic 11px system-ui" : "600 11px system-ui";
+      ctx.textAlign = "left";
+      ctx.textBaseline = "middle";
+      wrapText(ctx, n.label, n.x + 12, n.y + n.h / 2 - 6, n.w - 20);
+      // sub (mastery or "gap")
+      ctx.fillStyle = n.stage === "gap" ? "rgba(255,255,255,.5)" : "rgba(141,149,167,.6)";
+      ctx.font = "9px system-ui";
+      if (n.stage === "gap") { ctx.fillText("missing prereq", n.x + 12, n.y + n.h / 2 + 8); }
+      else { const pct = Math.round((n.mastery || 0) * 100); ctx.fillText(`${n.module_id} · ${pct}%`, n.x + 12, n.y + n.h / 2 + 8); }
     }
     ctx.restore();
   };
 
-  let down = null, downX = 0, downY = 0, panned = false;
-  canvas.addEventListener("pointerdown", (ev) => { down = ev; downX = ev.clientX; downY = ev.clientY; });
+  const wrapText = (ctx, text, x, y, maxW) => {
+    const words = text.split(" ");
+    let line = "";
+    let yy = y;
+    for (const w of words) {
+      const t = line ? line + " " + w : w;
+      if (ctx.measureText(t).width > maxW && line) { ctx.fillText(line, x, yy); line = w; yy += 12; }
+      else line = t;
+    }
+    ctx.fillText(line, x, yy);
+  };
+  graphState.wrapText = wrapText;
+
+  // interactions
+  const hit = (ev) => {
+    const rect = canvas.getBoundingClientRect();
+    const x = (ev.clientX - rect.left - graphState.panX) / graphState.zoom;
+    const y = (ev.clientY - rect.top - graphState.panY) / graphState.zoom;
+    for (const n of all) if (x >= n.x && x <= n.x + n.w && y >= n.y && y <= n.y + n.h) return n;
+    return null;
+  };
+  let pointerDown = false, moved = false, downX = 0, downY = 0;
   canvas.addEventListener("pointermove", (ev) => {
-    if (!down) return;
-    const dx = ev.clientX - downX, dy = ev.clientY - downY;
-    if (Math.abs(dx) > 4 || Math.abs(dy) > 4) panned = true;
-    downX = ev.clientX; downY = ev.clientY;
-    if (panned) { graphState.panX += dx; graphState.panY += dy; }
-  });
-  canvas.addEventListener("pointerup", (ev) => {
-    if (down && !panned) {
+    const n = hit(ev);
+    graphState.hover = n;
+    if (pointerDown && graphState.dragNode) {
       const rect = canvas.getBoundingClientRect();
       const x = (ev.clientX - rect.left - graphState.panX) / graphState.zoom;
       const y = (ev.clientY - rect.top - graphState.panY) / graphState.zoom;
-      const hit = [...nodes].reverse().find((n2) => (n2.x - x) ** 2 + (n2.y - y) ** 2 < (n2.r + 8) ** 2);
-      if (hit && !hit.id.startsWith("ghost:")) openConcept(hit.id);
+      graphState.dragNode.x = x - graphState.dragOffX;
+      graphState.dragNode.y = y - graphState.dragOffY;
+      // if it's a ghost, move it with the host-free
+      moved = true;
+    } else if (pointerDown && !graphState.dragNode) {
+      const dx = ev.clientX - downX, dy = ev.clientY - downY;
+      graphState.panX += dx; graphState.panY += dy;
+      downX = ev.clientX; downY = ev.clientY;
     }
-    down = null; panned = false;
+    draw();
   });
-  canvas.addEventListener("wheel", (e) => { e.preventDefault(); graphState.zoom = Math.max(0.4, Math.min(2.5, graphState.zoom * (e.deltaY > 0 ? 0.9 : 1.1))); }, { passive: false });
-  if (graphState._alive) cancelAnimationFrame(graphState._raf);
-  graphState._alive = true;
-  graphState._raf = requestAnimationFrame(step);
+  canvas.addEventListener("pointerdown", (ev) => {
+    const n = hit(ev);
+    pointerDown = true; downX = ev.clientX; downY = ev.clientY;
+    if (n) { graphState.dragNode = n; graphState.dragOffX = ev.clientX - n.x * graphState.zoom - graphState.panX; graphState.dragOffY = ev.clientY - n.y * graphState.zoom - graphState.panY; }
+    wrap.classList.add("dragging");
+  });
+  canvas.addEventListener("pointerup", (ev) => {
+    if (graphState.dragNode && !moved && !graphState.dragNode.ghost && !graphState.dragNode.id.startsWith("ghost:")) openConcept(graphState.dragNode.id);
+    graphState.dragNode = null; pointerDown = false; moved = false;
+    wrap.classList.remove("dragging");
+  });
+  canvas.addEventListener("wheel", (e) => { e.preventDefault(); graphState.zoom = Math.max(0.3, Math.min(2, graphState.zoom * (e.deltaY > 0 ? 0.92 : 1.1))); draw(); }, { passive: false });
+
+  graphState.fit = () => {
+    // compute bounding box
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const n of all) { minX = Math.min(minX, n.x); minY = Math.min(minY, n.y); maxX = Math.max(maxX, n.x + n.w); maxY = Math.max(maxY, n.y + n.h); }
+    const bw = maxX - minX, bh = maxY - minY;
+    graphState.zoom = Math.min(1, Math.min(W / (bw + 80), H / (bh + 80)));
+    graphState.panX = W / 2 - (minX + bw / 2) * graphState.zoom;
+    graphState.panY = H / 2 - (minY + bh / 2) * graphState.zoom;
+    draw();
+  };
+  draw();
+  graphState.fit();
 }
 
+window.fitGraph = () => graphState?.fit?.();
+window.graphReset = () => { renderGraph(); };
 /* ---------- init ---------- */
 window.toggleModule = toggleModule;
 window.openConcept = openConcept;

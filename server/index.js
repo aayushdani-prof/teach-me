@@ -61,6 +61,42 @@ const server = createServer((req, res) => {
     const gaps = db.prepare("SELECT * FROM gaps WHERE status = 'open' ORDER BY ts DESC LIMIT 50").all();
     return send(res, 200, JSON.stringify(gaps));
   }
+  if (url.pathname === "/api/graph" && req.method === "GET") {
+    const concepts = db.prepare("SELECT * FROM concepts ORDER BY id").all();
+    const gaps = db.prepare("SELECT * FROM gaps WHERE status = 'open' ORDER BY ts DESC").all();
+    const reviews = db.prepare("SELECT concept_id, outcome FROM reviews ORDER BY id").all();
+    // build edges: prereqs (solid) + discovered gaps (dashed)
+    const edges = [];
+    const seen = new Set();
+    for (const c of concepts) {
+      let pre;
+      try { pre = JSON.parse(c.prereqs || "[]"); } catch { pre = []; }
+      for (const pid of pre) {
+        const key = `${pid}:${c.id}`;
+        if (!seen.has(key)) { seen.add(key); edges.push({ from: pid, to: c.id, kind: "prereq" }); }
+      }
+    }
+    for (const g of gaps) {
+      const key = `${g.concept_id}:ghost`;
+      if (!seen.has(key)) { seen.add(key); edges.push({ from: g.concept_id, to: `ghost:${g.id}`, kind: "gap" }); }
+    }
+    // mastery per concept from reviews
+    const mastery = {};
+    for (const r of reviews) {
+      mastery[r.concept_id] = mastery[r.concept_id] || { pass: 0, total: 0 };
+      mastery[r.concept_id].total++;
+      if (r.outcome === "pass") mastery[r.concept_id].pass++;
+    }
+    const nodes = concepts.map((c) => {
+      const m = mastery[c.id] || { pass: 0, total: 0 };
+      return { id: c.id, label: c.title, module: c.module_id, stage: c.stage, mastery: m.total ? m.pass / m.total : 0, prereqs: c.prereqs };
+    });
+    // ghost nodes for open gaps
+    for (const g of gaps) {
+      nodes.push({ id: `ghost:${g.id}`, label: g.missing, module: g.concept_id, stage: "gap", mastery: 0, gapFor: g.concept_id });
+    }
+    return send(res, 200, JSON.stringify({ nodes, edges }));
+  }
   if (url.pathname === "/api/thread" && req.method === "GET") {
     const conceptId = url.searchParams.get("conceptId");
     return send(res, 200, JSON.stringify({ thread: getThread(conceptId) }));

@@ -24,6 +24,7 @@ function setView(v) {
   document.querySelectorAll(".nav-tab").forEach((t) => t.classList.toggle("active", t.dataset.view === v));
   if (v === "today") { current = null; renderToday(); }
   else if (v === "board") { current = null; renderBoard(); }
+  else if (v === "graph") { current = null; renderGraph(); }
   else if (v === "progress") { current = null; renderProgress(); }
 }
 function showCrumb() {
@@ -40,7 +41,7 @@ function HS() { return new Date().toISOString().slice(0, 10); }
 function renderAll() {
   renderSidebar();
   showCrumb();
-  if (!current) { const act = document.querySelector(".nav-tab.active")?.dataset.view; (act === "board" ? renderBoard : act === "progress" ? renderProgress : renderToday)(); }
+  if (!current) { const act = document.querySelector(".nav-tab.active")?.dataset.view; (act === "board" ? renderBoard : act === "graph" ? renderGraph : act === "progress" ? renderProgress : renderToday)(); }
   else if (current.id) renderConcept(current.id);
 }
 function renderSidebar() {
@@ -293,6 +294,129 @@ async function submitAdd() {
   else $("#addMsg").textContent = "Error: " + (r.error || "unknown");
 }
 
+
+/* ---------- Graph ---------- */
+let graphState = null;
+async function renderGraph() {
+  $("#view").innerHTML = `
+    <div class="graph-wrap" id="graphWrap">
+      <canvas id="graphCanvas"></canvas>
+      <div class="graph-legend">
+        <div class="lg"><span class="dot" style="background:#d29922"></span> learning</div>
+        <div class="lg"><span class="dot" style="background:#3fb950"></span> mastered</div>
+        <div class="lg"><span class="dot" style="background:#5a6577"></span> eventually</div>
+        <div class="lg"><span class="dot" style="background:#d8519d"></span> gap needed</div>
+      </div>
+      <div class="graph-hint">drag to move · scroll to zoom · click a node to open</div>
+    </div>`;
+  const data = await api("/api/graph");
+  const wrap = $("#graphWrap");
+  const canvas = $("#graphCanvas");
+  const ctx = canvas.getContext("2d");
+  const W = wrap.clientWidth, H = wrap.clientHeight;
+  canvas.width = W * devicePixelRatio; canvas.height = H * devicePixelRatio;
+  ctx.scale(devicePixelRatio, devicePixelRatio);
+
+  const nodes = data.nodes.map((n, i) => {
+    const a = (i / Math.max(1, data.nodes.length)) * Math.PI * 2;
+    const r = Math.min(W, H) * 0.32;
+    return { ...n, x: W / 2 + Math.cos(a) * r * (0.6 + ((i % 3) * 0.2)), y: H / 2 + Math.sin(a) * r, vx: 0, vy: 0, r: 16 };
+  });
+  const edges = data.edges || [];
+  const nodeMap = new Map(nodes.map((n) => [n.id, n]));
+  graphState = { nodes, edges, canvas, ctx, W, H, zoom: 1, panX: 0, panY: 0, _alive: false, _raf: 0 };
+
+  const step = () => {
+    for (const n of nodes) {
+      for (const o of nodes) {
+        if (n === o) continue;
+        let dx = n.x - o.x, dy = n.y - o.y;
+        let d2 = dx * dx + dy * dy;
+        if (d2 < 1) d2 = 1;
+        const f = 3000 / d2;
+        n.vx += (dx / Math.sqrt(d2)) * f;
+        n.vy += (dy / Math.sqrt(d2)) * f;
+      }
+      for (const e of edges) {
+        const a = nodeMap.get(e.from), b = nodeMap.get(e.to);
+        if (!a || !b) continue;
+        const dx = b.x - a.x, dy = b.y - a.y;
+        const d = Math.sqrt(dx * dx + dy * dy) || 1;
+        const f = (d - 110) * 0.008;
+        a.vx += (dx / d) * f; a.vy += (dy / d) * f;
+        b.vx -= (dx / d) * f; b.vy -= (dy / d) * f;
+      }
+      n.vx += (W / 2 - n.x) * 0.0015;
+      n.vy += (H / 2 - n.y) * 0.0015;
+      n.vx *= 0.86; n.vy *= 0.86;
+      n.x += n.vx; n.y += n.vy;
+      n.x = Math.max(25, Math.min(W - 25, n.x));
+      n.y = Math.max(25, Math.min(H - 25, n.y));
+    }
+    draw();
+    if (graphState._alive) requestAnimationFrame(step);
+  };
+
+  const draw = () => {
+    const { ctx, W, H, zoom, panX, panY, nodes, edges } = graphState;
+    ctx.clearRect(0, 0, W, H);
+    ctx.save();
+    ctx.translate(panX, panY);
+    ctx.scale(zoom, zoom);
+    for (const e of edges) {
+      const a = nodeMap.get(e.from), b = nodeMap.get(e.to);
+      if (!a || !b) continue;
+      const isGap = e.kind === "gap";
+      ctx.beginPath();
+      ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y);
+      ctx.strokeStyle = isGap ? "rgba(216,157,255,.4)" : "rgba(141,157,196,.35)";
+      ctx.lineWidth = isGap ? 1.5 : 2;
+      ctx.setLineDash(isGap ? [5, 4] : []);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+    for (const n of nodes) {
+      const color = n.stage === "off_docket" ? "#3fb950" : n.stage === "gap" ? "#d8519d" : n.stage === "eventually" ? "#5a6577" : "#d29922";
+      const r = n.stage === "gap" ? 24 : (14 + n.mastery * 10);
+      const grad = ctx.createRadialGradient(n.x, n.y, 0, n.x, n.y, r * 2.2);
+      grad.addColorStop(0, color + "66"); grad.addColorStop(1, "transparent");
+      ctx.fillStyle = grad;
+      ctx.beginPath(); ctx.arc(n.x, n.y, r * 2.2, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = color;
+      ctx.beginPath(); ctx.arc(n.x, n.y, r, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = "#e8ecf4";
+      ctx.font = "11px system-ui";
+      ctx.textAlign = "center";
+      ctx.fillText(n.label, n.x, n.y - r - 6);
+    }
+    ctx.restore();
+  };
+
+  let down = null, downX = 0, downY = 0, panned = false;
+  canvas.addEventListener("pointerdown", (ev) => { down = ev; downX = ev.clientX; downY = ev.clientY; });
+  canvas.addEventListener("pointermove", (ev) => {
+    if (!down) return;
+    const dx = ev.clientX - downX, dy = ev.clientY - downY;
+    if (Math.abs(dx) > 4 || Math.abs(dy) > 4) panned = true;
+    downX = ev.clientX; downY = ev.clientY;
+    if (panned) { graphState.panX += dx; graphState.panY += dy; }
+  });
+  canvas.addEventListener("pointerup", (ev) => {
+    if (down && !panned) {
+      const rect = canvas.getBoundingClientRect();
+      const x = (ev.clientX - rect.left - graphState.panX) / graphState.zoom;
+      const y = (ev.clientY - rect.top - graphState.panY) / graphState.zoom;
+      const hit = [...nodes].reverse().find((n2) => (n2.x - x) ** 2 + (n2.y - y) ** 2 < (n2.r + 8) ** 2);
+      if (hit && !hit.id.startsWith("ghost:")) openConcept(hit.id);
+    }
+    down = null; panned = false;
+  });
+  canvas.addEventListener("wheel", (e) => { e.preventDefault(); graphState.zoom = Math.max(0.4, Math.min(2.5, graphState.zoom * (e.deltaY > 0 ? 0.9 : 1.1))); }, { passive: false });
+  if (graphState._alive) cancelAnimationFrame(graphState._raf);
+  graphState._alive = true;
+  graphState._raf = requestAnimationFrame(step);
+}
+
 /* ---------- init ---------- */
 window.toggleModule = toggleModule;
 window.openConcept = openConcept;
@@ -302,6 +426,7 @@ window.showAdd = showAdd;
 window.submitAdd = submitAdd;
 window.setView = setView;
 window.confOut = confOut;
+window.renderGraph = renderGraph;
 window.renderSidebar = renderSidebar;
 loadDashboard();
 async function loadDashboard() { await reloadData(); }

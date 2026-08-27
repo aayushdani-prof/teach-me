@@ -57,6 +57,10 @@ const server = createServer((req, res) => {
     const mastered = db.prepare("SELECT COUNT(*) n FROM concepts WHERE stage='off_docket'").get().n;
     return send(res, 200, JSON.stringify({ total, mastered }));
   }
+  if (url.pathname === "/api/gaps" && req.method === "GET") {
+    const gaps = db.prepare("SELECT * FROM gaps WHERE status = 'open' ORDER BY ts DESC LIMIT 50").all();
+    return send(res, 200, JSON.stringify(gaps));
+  }
   if (url.pathname === "/api/thread" && req.method === "GET") {
     const conceptId = url.searchParams.get("conceptId");
     return send(res, 200, JSON.stringify({ thread: getThread(conceptId) }));

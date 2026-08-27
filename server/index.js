@@ -61,6 +61,36 @@ const server = createServer((req, res) => {
     const conceptId = url.searchParams.get("conceptId");
     return send(res, 200, JSON.stringify({ thread: getThread(conceptId) }));
   }
+  if (url.pathname === "/api/concepts" && req.method === "GET") {
+    const rows = db.prepare("SELECT * FROM concepts ORDER BY module_id, id").all();
+    const modules = db.prepare("SELECT * FROM modules ORDER BY id").all();
+    return send(res, 200, JSON.stringify({ concepts: rows, modules }));
+  }
+  if (url.pathname === "/api/concepts" && req.method === "POST") {
+    let body = "";
+    req.on("data", (c) => (body += c));
+    req.on("end", () => {
+      try {
+        const { title, objective, moduleId, tier = "core", prereqs = "", source } = JSON.parse(body || "{}");
+        if (!title || !objective) return send(res, 400, JSON.stringify({ error: "title and objective required" }));
+        const id = "C" + Date.now().toString().slice(-6);
+        // ensure module exists
+        const mod = db.prepare("SELECT id FROM modules WHERE id = ?").get(moduleId || "M0");
+        if (!mod) db.prepare("INSERT INTO modules (id, title, stage) VALUES (?,?, 'in_progress')").run(moduleId || "M0", moduleId ? title : "Manual Module");
+        const prereqArr = String(prereqs || "").split(",").map((s) => s.trim()).filter(Boolean);
+        db.prepare(
+          `INSERT INTO concepts (id, title, module_id, stage, objective, session_hours, tier, evidence_strength, prereqs)
+           VALUES (?,?,?,?,?,?,?,?,?)`
+        ).run(id, title, moduleId || "M0", "docket", objective, 1.5, tier, "medium", JSON.stringify(prereqArr));
+        db.prepare(
+          `INSERT INTO concept_state (concept_id, interval_days, due_at, ease, success_count, transfer_count)
+           VALUES (?,?,?,?,?,?)`
+        ).run(id, 1.0, nowIso(), 2.5, 0, 0);
+        send(res, 200, JSON.stringify({ ok: true, id }));
+      } catch (e) { send(res, 400, JSON.stringify({ error: e.message })); }
+    });
+    return;
+  }
   if (url.pathname === "/api/chat" && req.method === "POST") {
     let body = "";
     req.on("data", (c) => (body += c));

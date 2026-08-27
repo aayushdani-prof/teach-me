@@ -4,13 +4,64 @@ const api = async (p, opts) => (await fetch(p, opts)).json();
 async function loadDashboard() {
   const [today, progress] = await Promise.all([api("/api/today"), api("/api/progress")]);
   const due = today.due || [];
-  $("#pills").innerHTML = `<span class="pill"><span class="n">${due.length}</span> due today</span>`;
+  $("#pills").innerHTML = `
+    <span class="pill"><span class="n">${due.length}</span> due today</span>
+    <button onclick="showAdd()" style="margin-left:.5rem;padding:.3rem .7rem;font-size:.8rem">+ Add concept</button>`;
   $("#concepts").innerHTML = (progress.concepts || []).map((c) => `
     <div class="concept" onclick="openConcept('${c.id}')">
       <span class="stage stage-${c.stage}">${c.stage}</span>
       ${c.title}
       <div class="meta">${c.module_id} · int ${c.interval_days ?? "–"}d · succ ${c.success_count ?? 0}</div>
     </div>`).join("");
+}
+
+async function showAdd() {
+  const data = await api("/api/concepts");
+  const mods = (data.modules || []).map((m) => `<option value="${m.id}">${m.title}</option>`).join("");
+  $("#view").innerHTML = `
+    <div class="card">
+      <h2>Add a concept</h2>
+      <p class="objective">Directly from Discovery or your own material — the tutor will teach it on demand.</p>
+      <label>Title</label>
+      <input id="newTitle" placeholder="e.g. NCCL AllReduce" style="width:100%"/>
+      <label>Objective (learner can, given X, do Y)</label>
+      <textarea id="newObjective" placeholder="e.g. learner can explain what AllReduce does and identify when gradient sync times out"></textarea>
+      <label>Module</label>
+      <select id="newModule">${mods || "<option value=\"M0\">M0</option>"}</select>
+      <label>Tier</label>
+      <select id="newTier">
+        <option value="core">core</option><option value="important">important</option><option value="nice">nice</option>
+      </select>
+      <label>Prereqs (comma-separated concept ids, optional)</label>
+      <input id="newPrereqs" placeholder="e.g. C1, C2" style="width:100%"/>
+      <div class="row">
+        <button onclick="submitAdd()">Add & start learning</button>
+        <span class="log" id="addMsg"></span>
+      </div>
+    </div>`;
+}
+
+async function submitAdd() {
+  const title = $("#newTitle").value.trim();
+  const objective = $("#newObjective").value.trim();
+  if (!title || !objective) { $("#addMsg").textContent = "title + objective required"; return; }
+  const r = await api("/api/concepts", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      title,
+      objective,
+      moduleId: $("#newModule").value,
+      tier: $("#newTier").value,
+      prereqs: $("#newPrereqs").value,
+    }),
+  });
+  if (r.ok) {
+    $("#addMsg").textContent = `Added ${r.id}`;
+    setTimeout(() => { loadDashboard(); openConcept(r.id); }, 600);
+  } else {
+    $("#addMsg").textContent = "Error: " + (r.error || "unknown");
+  }
 }
 
 async function openConcept(id) {
@@ -100,4 +151,6 @@ async function submitReview(id) {
 window.openConcept = openConcept;
 window.submitReview = submitReview;
 window.sendChat = sendChat;
+window.showAdd = showAdd;
+window.submitAdd = submitAdd;
 loadDashboard();
